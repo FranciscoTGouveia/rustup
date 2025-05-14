@@ -22,7 +22,7 @@ use wait_timeout::ChildExt;
 use crate::{
     RustupError,
     config::{ActiveReason, Cfg, InstalledPath},
-    dist::PartialToolchainDesc,
+    dist::{PartialToolchainDesc, TargetTriple},
     env_var, install,
     notifications::Notification,
     utils::{self, raw::open_dir_following_links},
@@ -575,5 +575,28 @@ impl<'a> Toolchain<'a> {
             (cfg.notify_handler)(Notification::UninstalledToolchain(&name));
         }
         Ok(())
+    }
+
+    /// List targets support by (custom) toolchain
+    ///
+    ///
+    pub fn list_targets(&self) -> anyhow::Result<Vec<TargetTriple>> {
+        let rustlib_path = self.path.join("lib").join("rustlib");
+        if !rustlib_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut targets = Vec::new();
+        for entry in fs::read_dir(rustlib_path)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name != "etc" {
+                        targets.push(TargetTriple::new(name.to_string()));
+                    }
+                }
+            }
+        }
+        Ok(targets)
     }
 }
