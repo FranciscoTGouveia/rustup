@@ -5,9 +5,9 @@ use std::sync::Arc;
 use std::{env, io};
 
 use anyhow::{Context, Result, anyhow, bail};
+use futures_util::stream::StreamExt;
 use serde::Deserialize;
 use thiserror::Error as ThisError;
-use tokio_stream::StreamExt;
 use tracing::trace;
 
 use crate::dist::AutoInstallMode;
@@ -952,11 +952,15 @@ impl<'a> Cfg<'a> {
         force_update: bool,
     ) -> Result<Vec<(ToolchainDesc, Result<UpdateStatus>)>> {
         let channels = self.list_channels()?;
-        let channels = channels.into_iter();
+        let num_channels = channels.len();
+        // Ensure that we never try to run 0 futures as this will cause a hang.
+        if num_channels == 0 {
+            return Ok(vec![]);
+        }
         let profile = self.get_profile()?;
 
         // Update toolchains and collect the results
-        let channels = tokio_stream::iter(channels).then(|(desc, mut distributable)| async move {
+        let channels = tokio_stream::iter(channels).map(|(desc, mut distributable)| async move {
             let st = distributable
                 .update_extra(&[], &[], profile, force_update, false)
                 .await;
@@ -966,7 +970,7 @@ impl<'a> Cfg<'a> {
             (desc, st)
         });
 
-        Ok(channels.collect().await)
+        Ok(channels.buffered(num_channels).collect::<Vec<_>>().await)
     }
 
     pub(crate) fn set_default_host_triple(&self, host_triple: String) -> Result<()> {
