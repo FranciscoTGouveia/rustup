@@ -9,6 +9,7 @@ use std::str::FromStr;
 use anyhow::{Context, Error, Result, anyhow};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum, builder::PossibleValue};
 use clap_complete::Shell;
+use futures_util::stream::StreamExt;
 use itertools::Itertools;
 use tracing::{info, trace, warn};
 use tracing_subscriber::{EnvFilter, Registry, reload::Handle};
@@ -794,37 +795,47 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
 
     let mut t = cfg.process.stdout().terminal(cfg.process);
     let channels = cfg.list_channels()?;
+    let num_channels = channels.len();
+    // Ensure that we never try to run 0 futures as this will cause a hang.
+    if num_channels != 0 {
+        let channels = tokio_stream::iter(channels)
+            .map(|(name, distributable)| async move {
+                let current_version = distributable.show_version()?;
+                let dist_version = distributable.show_dist_version().await?;
+                Ok::<_, anyhow::Error>((name, current_version, dist_version))
+            })
+            .buffered(num_channels)
+            .collect::<Vec<_>>();
 
-    for channel in channels {
-        let (name, distributable) = channel;
-        let current_version = distributable.show_version()?;
-        let dist_version = distributable.show_dist_version().await?;
-        let _ = t.attr(terminalsource::Attr::Bold);
-        write!(t.lock(), "{name} - ")?;
-        match (current_version, dist_version) {
-            (None, None) => {
-                let _ = t.fg(terminalsource::Color::Red);
-                writeln!(t.lock(), "Cannot identify installed or update versions")?;
-            }
-            (Some(cv), None) => {
-                let _ = t.fg(terminalsource::Color::Green);
-                write!(t.lock(), "Up to date")?;
-                let _ = t.reset();
-                writeln!(t.lock(), " : {cv}")?;
-            }
-            (Some(cv), Some(dv)) => {
-                update_available = true;
-                let _ = t.fg(terminalsource::Color::Yellow);
-                write!(t.lock(), "Update available")?;
-                let _ = t.reset();
-                writeln!(t.lock(), " : {cv} -> {dv}")?;
-            }
-            (None, Some(dv)) => {
-                update_available = true;
-                let _ = t.fg(terminalsource::Color::Yellow);
-                write!(t.lock(), "Update available")?;
-                let _ = t.reset();
-                writeln!(t.lock(), " : (Unknown version) -> {dv}")?;
+        for channel in channels.await {
+            let (name, current_version, dist_version) = channel?;
+            let _ = t.attr(terminalsource::Attr::Bold);
+            write!(t.lock(), "{name} - ")?;
+            match (current_version, dist_version) {
+                (None, None) => {
+                    let _ = t.fg(terminalsource::Color::Red);
+                    writeln!(t.lock(), "Cannot identify installed or update versions")?;
+                }
+                (Some(cv), None) => {
+                    let _ = t.fg(terminalsource::Color::Green);
+                    write!(t.lock(), "Up to date")?;
+                    let _ = t.reset();
+                    writeln!(t.lock(), " : {cv}")?;
+                }
+                (Some(cv), Some(dv)) => {
+                    update_available = true;
+                    let _ = t.fg(terminalsource::Color::Yellow);
+                    write!(t.lock(), "Update available")?;
+                    let _ = t.reset();
+                    writeln!(t.lock(), " : {cv} -> {dv}")?;
+                }
+                (None, Some(dv)) => {
+                    update_available = true;
+                    let _ = t.fg(terminalsource::Color::Yellow);
+                    write!(t.lock(), "Update available")?;
+                    let _ = t.reset();
+                    writeln!(t.lock(), " : (Unknown version) -> {dv}")?;
+                }
             }
         }
     }
