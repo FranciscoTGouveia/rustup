@@ -11,6 +11,7 @@ use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum, builder::Possibl
 use clap_complete::Shell;
 use futures_util::stream::StreamExt;
 use itertools::Itertools;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tracing::{info, trace, warn};
 use tracing_subscriber::{EnvFilter, Registry, reload::Handle};
 
@@ -791,53 +792,68 @@ async fn default_(
 }
 
 async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode> {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     let mut update_available;
-    let t = Arc::new(Mutex::new(cfg.process.stdout().terminal(cfg.process)));
     let channels = cfg.list_channels()?;
     let num_channels = channels.len();
     if num_channels == 0 {
         return Ok(utils::ExitCode(1));
     }
 
-    let channels = tokio_stream::iter(channels).map(|(name, distributable)| {
-        let t = Arc::clone(&t);
+    let mp = Arc::new(MultiProgress::new());
+
+    // Create progress bars for each channel
+    let progress_bars: Vec<_> = channels.iter().map(|(name, _)| {
+        let pb = mp.add(ProgressBar::new(1));
+        pb.set_style(
+            ProgressStyle::with_template("{spinner:.green} {msg}")
+                .unwrap()
+                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+        );
+        pb.set_message(format!("{} - Checking...", name));
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+        pb
+    }).collect();
+
+    let channels = tokio_stream::iter(channels.into_iter().zip(progress_bars)).map(|((name, distributable), pb)| {
         async move {
             let current_version = distributable.show_version()?;
             let dist_version = distributable.show_dist_version().await?;
             let mut update_a = false;
-            let mut terminal = t.lock().unwrap();
-            terminal.attr(terminalsource::Attr::Bold)?;
-            write!(terminal.lock(), "{name} - ")?;
-            match (current_version, dist_version) {
+            
+            let (message, style) = match (current_version, dist_version) {
                 (None, None) => {
-                    terminal.fg(terminalsource::Color::Red)?;
-                    writeln!(terminal.lock(), "Cannot identify installed or update versions")?;
+                    let msg = format!("{} - Cannot identify installed or update versions", name);
+                    let style = ProgressStyle::with_template("{msg}").unwrap();
+                    (msg, style)
                 }
                 (Some(cv), None) => {
-                    terminal.fg(terminalsource::Color::Green)?;
-                    write!(terminal.lock(), "Up to date")?;
-                    terminal.reset()?;
-                    writeln!(terminal.lock(), " : {cv}")?;
+                    let msg = format!("{} - Up to date : {}", name, cv);
+                    let style = ProgressStyle::with_template("✓ {msg}").unwrap();
+                    (msg, style)
                 }
                 (Some(cv), Some(dv)) => {
                     update_a = true;
-                    terminal.fg(terminalsource::Color::Yellow)?;
-                    write!(terminal.lock(), "Update available")?;
-                    terminal.reset()?;
-                    writeln!(terminal.lock(), " : {cv} -> {dv}")?;
+                    let msg = format!("{} - Update available : {} -> {}", name, cv, dv);
+                    let style = ProgressStyle::with_template("↑ {msg}").unwrap();
+                    (msg, style)
                 }
                 (None, Some(dv)) => {
                     update_a = true;
-                    terminal.fg(terminalsource::Color::Yellow)?;
-                    write!(terminal.lock(), "Update available")?;
-                    terminal.reset()?;
-                    writeln!(terminal.lock(), " : (Unknown version) -> {dv}")?;
+                    let msg = format!("{} - Update available : (Unknown version) -> {}", name, dv);
+                    let style = ProgressStyle::with_template("↑ {msg}").unwrap();
+                    (msg, style)
                 }
-            }
+            };
+            pb.set_style(style);
+            pb.set_message(message);
+            // Maybe substitute with `finish_and_clear()`.
+            pb.finish();
             Ok::<bool, Error>(update_a)
         }
     }).buffered(num_channels).collect::<Vec<_>>().await;
+
+    //mp.clear()?;
 
     update_available = channels.into_iter().any(|r| match r {
         Ok(update) => update,
