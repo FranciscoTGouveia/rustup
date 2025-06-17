@@ -791,55 +791,61 @@ async fn default_(
 }
 
 async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode> {
-    let mut update_available = false;
-
-    let mut t = cfg.process.stdout().terminal(cfg.process);
+    use std::sync::{Arc, Mutex};
+    let mut update_available;
+    let t = Arc::new(Mutex::new(cfg.process.stdout().terminal(cfg.process)));
     let channels = cfg.list_channels()?;
     let num_channels = channels.len();
-    // Ensure that we never try to run 0 futures as this will cause a hang.
-    if num_channels != 0 {
-        let channels = tokio_stream::iter(channels)
-            .map(|(name, distributable)| async move {
-                let current_version = distributable.show_version()?;
-                let dist_version = distributable.show_dist_version().await?;
-                Ok::<_, anyhow::Error>((name, current_version, dist_version))
-            })
-            .buffered(num_channels)
-            .collect::<Vec<_>>();
-
-        for channel in channels.await {
-            let (name, current_version, dist_version) = channel?;
-            let _ = t.attr(terminalsource::Attr::Bold);
-            write!(t.lock(), "{name} - ")?;
-            match (current_version, dist_version) {
-                (None, None) => {
-                    let _ = t.fg(terminalsource::Color::Red);
-                    writeln!(t.lock(), "Cannot identify installed or update versions")?;
-                }
-                (Some(cv), None) => {
-                    let _ = t.fg(terminalsource::Color::Green);
-                    write!(t.lock(), "Up to date")?;
-                    let _ = t.reset();
-                    writeln!(t.lock(), " : {cv}")?;
-                }
-                (Some(cv), Some(dv)) => {
-                    update_available = true;
-                    let _ = t.fg(terminalsource::Color::Yellow);
-                    write!(t.lock(), "Update available")?;
-                    let _ = t.reset();
-                    writeln!(t.lock(), " : {cv} -> {dv}")?;
-                }
-                (None, Some(dv)) => {
-                    update_available = true;
-                    let _ = t.fg(terminalsource::Color::Yellow);
-                    write!(t.lock(), "Update available")?;
-                    let _ = t.reset();
-                    writeln!(t.lock(), " : (Unknown version) -> {dv}")?;
-                }
-            }
-        }
+    if num_channels == 0 {
+        return Ok(utils::ExitCode(1));
     }
 
+    let channels = tokio_stream::iter(channels).map(|(name, distributable)| {
+        let t = Arc::clone(&t);
+        async move {
+            let current_version = distributable.show_version()?;
+            let dist_version = distributable.show_dist_version().await?;
+            let mut update_a = false;
+            let mut terminal = t.lock().unwrap();
+            terminal.attr(terminalsource::Attr::Bold)?;
+            write!(terminal.lock(), "{name} - ")?;
+            match (current_version, dist_version) {
+                (None, None) => {
+                    terminal.fg(terminalsource::Color::Red)?;
+                    writeln!(terminal.lock(), "Cannot identify installed or update versions")?;
+                }
+                (Some(cv), None) => {
+                    terminal.fg(terminalsource::Color::Green)?;
+                    write!(terminal.lock(), "Up to date")?;
+                    terminal.reset()?;
+                    writeln!(terminal.lock(), " : {cv}")?;
+                }
+                (Some(cv), Some(dv)) => {
+                    update_a = true;
+                    terminal.fg(terminalsource::Color::Yellow)?;
+                    write!(terminal.lock(), "Update available")?;
+                    terminal.reset()?;
+                    writeln!(terminal.lock(), " : {cv} -> {dv}")?;
+                }
+                (None, Some(dv)) => {
+                    update_a = true;
+                    terminal.fg(terminalsource::Color::Yellow)?;
+                    write!(terminal.lock(), "Update available")?;
+                    terminal.reset()?;
+                    writeln!(terminal.lock(), " : (Unknown version) -> {dv}")?;
+                }
+            }
+            Ok::<bool, Error>(update_a)
+        }
+    }).buffered(num_channels).collect::<Vec<_>>().await;
+
+    update_available = channels.into_iter().any(|r| match r {
+        Ok(update) => update,
+        Err(e) => {
+            warn!("Error checking for updates: {}", e);
+            false
+        }
+    });
     let self_update_mode = cfg.get_self_update_mode()?;
     // Priority: no-self-update feature > self_update_mode > no-self-update args.
     // Check for update only if rustup does **not** have the no-self-update feature,
