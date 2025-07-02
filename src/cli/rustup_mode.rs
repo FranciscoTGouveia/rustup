@@ -792,12 +792,17 @@ async fn default_(
 }
 
 async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode> {
+    let t = cfg.process.stdout().terminal(cfg.process);
+    let is_a_tty = t.is_a_tty();
     let mut update_available = false;
     let channels = cfg.list_channels()?;
     let num_channels = channels.len();
     if num_channels > 0 {
-        let mp = MultiProgress::with_draw_target(ProgressDrawTarget::stdout());
-
+        let mp = if is_a_tty {
+            MultiProgress::with_draw_target(ProgressDrawTarget::term_like(Box::new(t)))
+        } else {
+            MultiProgress::with_draw_target(ProgressDrawTarget::hidden())
+        };
         let progress_bars: Vec<_> = channels
             .iter()
             .map(|(name, _)| {
@@ -819,40 +824,40 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
                 let dist_version = distributable.show_dist_version().await?;
                 let mut update_a = false;
 
-                let (message, style) = match (current_version, dist_version) {
+                let message = match (current_version, dist_version) {
                     (None, None) => {
-                        let msg =
-                            format!("{} - Cannot identify installed or update versions", name);
-                        let style = ProgressStyle::with_template("{msg}").unwrap();
-                        (msg, style)
+                        format!("{} - Cannot identify installed or update versions", name)
                     }
                     (Some(cv), None) => {
-                        let msg = format!("{} - Up to date : {}", name, cv);
-                        let style = ProgressStyle::with_template("{msg}").unwrap();
-                        (msg, style)
+                        format!("{} - Up to date : {}", name, cv)
                     }
                     (Some(cv), Some(dv)) => {
                         update_a = true;
-                        let msg = format!("{} - Update available : {} -> {}", name, cv, dv);
-                        let style = ProgressStyle::with_template("{msg}").unwrap();
-                        (msg, style)
+                        format!("{} - Update available : {} -> {}", name, cv, dv)
                     }
                     (None, Some(dv)) => {
                         update_a = true;
-                        let msg =
-                            format!("{} - Update available : (Unknown version) -> {}", name, dv);
-                        let style = ProgressStyle::with_template("{msg}").unwrap();
-                        (msg, style)
+                        format!("{} - Update available : (Unknown version) -> {}", name, dv)
                     }
                 };
-                pb.set_style(style);
-                pb.finish_with_message(message);
-                Ok::<bool, Error>(update_a)
+                pb.set_style(ProgressStyle::with_template("{msg}").unwrap());
+                pb.finish_with_message(message.clone());
+                Ok::<(bool, String), Error>((update_a, message))
             })
-            .buffered(num_channels)
+            .buffered(num_channels) //TODO: this could be buffer_unordered as we are using `indicatif`
             .collect::<Vec<_>>()
             .await;
-        update_available = channels.into_iter().any(|r| r.unwrap_or(false));
+
+        let t = cfg.process.stdout().terminal(cfg.process);
+        for result in channels.into_iter() {
+            let (update_a, message) = result?;
+            if update_a {
+                update_available = true;
+            }
+            if !is_a_tty {
+                writeln!(t.lock(), "{}", message)?;
+            }
+        }
     }
     let self_update_mode = cfg.get_self_update_mode()?;
     // Priority: no-self-update feature > self_update_mode > no-self-update args.
