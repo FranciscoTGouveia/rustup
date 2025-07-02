@@ -795,14 +795,19 @@ async fn default_(
 }
 
 async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode> {
+    let t = cfg.process.stdout().terminal(cfg.process);
+    let is_a_tty = t.is_a_tty();
     let mut update_available = false;
     let channels = cfg.list_channels()?;
     let num_channels = channels.len();
     // Ensure that `.buffered()` is never called with 0, as this would cause an hang.
     // See: https://github.com/rust-lang/futures-rs/pull/1194#discussion_r209501774
     if num_channels > 0 {
-        let mp = MultiProgress::with_draw_target(ProgressDrawTarget::stdout());
-
+        let mp = if is_a_tty {
+            MultiProgress::with_draw_target(ProgressDrawTarget::term_like(Box::new(t)))
+        } else {
+            MultiProgress::with_draw_target(ProgressDrawTarget::hidden())
+        };
         let progress_bars: Vec<_> = channels
             .iter()
             .map(|(name, _)| {
@@ -812,52 +817,59 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
                         .unwrap()
                         .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
                 );
-                pb.set_message(format!("{} - Checking...", name));
+                pb.set_message(format!("{name} - Checking..."));
                 pb.enable_steady_tick(Duration::from_millis(100));
                 pb
             })
             .collect();
 
-        let channels = tokio_stream::iter(channels.into_iter().zip(progress_bars))
-            .map(|((name, distributable), pb)| async move {
+        let channels = tokio_stream::iter(channels.into_iter().zip(progress_bars)).map(
+            |((name, distributable), pb)| async move {
                 let current_version = distributable.show_version()?;
                 let dist_version = distributable.show_dist_version().await?;
                 let mut update_a = false;
 
-                let (message, style) = match (current_version, dist_version) {
+                let message = match (current_version, dist_version) {
                     (None, None) => {
-                        let msg =
-                            format!("{} - Cannot identify installed or update versions", name);
-                        let style = ProgressStyle::with_template("{msg}").unwrap();
-                        (msg, style)
+                        format!("{name} - Cannot identify installed or update versions")
                     }
                     (Some(cv), None) => {
-                        let msg = format!("{} - Up to date : {}", name, cv);
-                        let style = ProgressStyle::with_template("{msg}").unwrap();
-                        (msg, style)
+                        format!("{name} - Up to date : {cv}")
                     }
                     (Some(cv), Some(dv)) => {
                         update_a = true;
-                        let msg = format!("{} - Update available : {} -> {}", name, cv, dv);
-                        let style = ProgressStyle::with_template("{msg}").unwrap();
-                        (msg, style)
+                        format!("{name} - Update available : {cv} -> {dv}")
                     }
                     (None, Some(dv)) => {
                         update_a = true;
-                        let msg =
-                            format!("{} - Update available : (Unknown version) -> {}", name, dv);
-                        let style = ProgressStyle::with_template("{msg}").unwrap();
-                        (msg, style)
+                        format!("{name} - Update available : (Unknown version) -> {dv}")
                     }
                 };
-                pb.set_style(style);
-                pb.finish_with_message(message);
-                Ok::<bool, Error>(update_a)
-            })
-            .buffered(num_channels)
-            .collect::<Vec<_>>()
-            .await;
-        update_available = channels.into_iter().any(|r| r.unwrap_or(false));
+                pb.set_style(ProgressStyle::with_template("{msg}").unwrap());
+                pb.finish_with_message(message.clone());
+                Ok::<(bool, String), Error>((update_a, message))
+            },
+        );
+
+        let channels = if is_a_tty {
+            channels
+                .buffer_unordered(num_channels)
+                .collect::<Vec<_>>()
+                .await
+        } else {
+            channels.buffered(num_channels).collect::<Vec<_>>().await
+        };
+
+        let t = cfg.process.stdout().terminal(cfg.process);
+        for result in channels.into_iter() {
+            let (update_a, message) = result?;
+            if update_a {
+                update_available = true;
+            }
+            if !is_a_tty {
+                writeln!(t.lock(), "{message}")?;
+            }
+        }
     }
     let self_update_mode = cfg.get_self_update_mode()?;
     // Priority: no-self-update feature > self_update_mode > no-self-update args.
