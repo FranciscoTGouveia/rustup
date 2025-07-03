@@ -12,6 +12,7 @@ use std::{
 use anyhow::{Context, Error, Result, anyhow};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum, builder::PossibleValue};
 use clap_complete::Shell;
+use console::style;
 use futures_util::stream::StreamExt;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use itertools::Itertools;
@@ -813,11 +814,11 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
             .map(|(name, _)| {
                 let pb = mp.add(ProgressBar::new(1));
                 pb.set_style(
-                    ProgressStyle::with_template("{msg} {spinner:.green}")
+                    ProgressStyle::with_template("{msg:.bold} - Checking... {spinner:.green}")
                         .unwrap()
                         .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
                 );
-                pb.set_message(format!("{name} - Checking..."));
+                pb.set_message(format!("{name}"));
                 pb.enable_steady_tick(Duration::from_millis(100));
                 pb
             })
@@ -829,28 +830,38 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
                 let dist_version = distributable.show_dist_version().await?;
                 let mut update_a = false;
 
+                let styled_name = style(format!("{name} - ")).bold();
                 let message = match (current_version, dist_version) {
                     (None, None) => {
-                        format!("{name} - Cannot identify installed or update versions")
+                        let m = style("Cannot identify installed or update versions")
+                            .red()
+                            .bold();
+                        format!("{styled_name}{m}")
                     }
                     (Some(cv), None) => {
-                        format!("{name} - Up to date : {cv}")
+                        let m = style("Up to date").green().bold();
+                        format!("{styled_name}{m} : {cv}")
                     }
                     (Some(cv), Some(dv)) => {
+                        let m = style("Update available").yellow().bold();
                         update_a = true;
-                        format!("{name} - Update available : {cv} -> {dv}")
+                        format!("{styled_name}{m} : {cv} -> {dv}")
                     }
                     (None, Some(dv)) => {
+                        let m = style("Update available").yellow().bold();
                         update_a = true;
-                        format!("{name} - Update available : (Unknown version) -> {dv}")
+                        format!("{styled_name}{m} : (Unknown version) -> {dv}")
                     }
                 };
-                pb.set_style(ProgressStyle::with_template("{msg}").unwrap());
-                pb.finish_with_message(message.clone());
+                pb.set_style(ProgressStyle::with_template(message.as_str()).unwrap());
+                pb.finish();
                 Ok::<(bool, String), Error>((update_a, message))
             },
         );
 
+        // If we are running in a TTY, we can use `buffer_unordered` since
+        // displaying the output in the correct order is already handled by
+        // `indicatif`.
         let channels = if is_a_tty {
             channels
                 .buffer_unordered(num_channels)
