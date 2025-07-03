@@ -245,7 +245,7 @@ impl TermLike for ColorableTerminal {
             return Ok(());
         }
         let mut t = self.lock();
-        write!(t, "\x1b[{}A", n)?;
+        write!(t, "\x1b[{n}A")?;
         t.flush()
     }
 
@@ -254,7 +254,7 @@ impl TermLike for ColorableTerminal {
             return Ok(());
         }
         let mut t = self.lock();
-        write!(t, "\x1b[{}B", n)?;
+        write!(t, "\x1b[{n}B")?;
         t.flush()
     }
 
@@ -263,7 +263,7 @@ impl TermLike for ColorableTerminal {
             return Ok(());
         }
         let mut t = self.lock();
-        write!(t, "\x1b[{}C", n)?;
+        write!(t, "\x1b[{n}C")?;
         t.flush()
     }
 
@@ -272,7 +272,7 @@ impl TermLike for ColorableTerminal {
             return Ok(());
         }
         let mut t = self.lock();
-        write!(t, "\x1b[{}D", n)?;
+        write!(t, "\x1b[{n}D")?;
         t.flush()
     }
 

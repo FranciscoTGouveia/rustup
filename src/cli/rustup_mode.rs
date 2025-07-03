@@ -812,7 +812,7 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
                         .unwrap()
                         .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
                 );
-                pb.set_message(format!("{} - Checking...", name));
+                pb.set_message(format!("{name} - Checking..."));
                 pb.enable_steady_tick(std::time::Duration::from_millis(100));
                 pb
             })
@@ -826,18 +826,18 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
 
                 let message = match (current_version, dist_version) {
                     (None, None) => {
-                        format!("{} - Cannot identify installed or update versions", name)
+                        format!("{name} - Cannot identify installed or update versions")
                     }
                     (Some(cv), None) => {
-                        format!("{} - Up to date : {}", name, cv)
+                        format!("{name} - Up to date : {cv}")
                     }
                     (Some(cv), Some(dv)) => {
                         update_a = true;
-                        format!("{} - Update available : {} -> {}", name, cv, dv)
+                        format!("{name} - Update available : {cv} -> {dv}")
                     }
                     (None, Some(dv)) => {
                         update_a = true;
-                        format!("{} - Update available : (Unknown version) -> {}", name, dv)
+                        format!("{name} - Update available : (Unknown version) -> {dv}")
                     }
                 };
                 pb.set_style(ProgressStyle::with_template("{msg}").unwrap());
@@ -855,7 +855,7 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
                 update_available = true;
             }
             if !is_a_tty {
-                writeln!(t.lock(), "{}", message)?;
+                writeln!(t.lock(), "{message}")?;
             }
         }
     }
