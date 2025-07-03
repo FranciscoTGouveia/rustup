@@ -818,8 +818,8 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
             })
             .collect();
 
-        let channels = tokio_stream::iter(channels.into_iter().zip(progress_bars))
-            .map(|((name, distributable), pb)| async move {
+        let channels = tokio_stream::iter(channels.into_iter().zip(progress_bars)).map(
+            |((name, distributable), pb)| async move {
                 let current_version = distributable.show_version()?;
                 let dist_version = distributable.show_dist_version().await?;
                 let mut update_a = false;
@@ -843,10 +843,17 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
                 pb.set_style(ProgressStyle::with_template("{msg}").unwrap());
                 pb.finish_with_message(message.clone());
                 Ok::<(bool, String), Error>((update_a, message))
-            })
-            .buffered(num_channels) //TODO: this could be buffer_unordered as we are using `indicatif`
-            .collect::<Vec<_>>()
-            .await;
+            },
+        );
+
+        let channels = if is_a_tty {
+            channels
+                .buffer_unordered(num_channels)
+                .collect::<Vec<_>>()
+                .await
+        } else {
+            channels.buffered(num_channels).collect::<Vec<_>>().await
+        };
 
         let t = cfg.process.stdout().terminal(cfg.process);
         for result in channels.into_iter() {
