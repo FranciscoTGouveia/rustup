@@ -8,8 +8,8 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-pub(crate) use termcolor::Color;
-use termcolor::{ColorChoice, ColorSpec, StandardStream, StandardStreamLock, WriteColor};
+pub(crate) use termcolor::{Color, ColorChoice};
+use termcolor::{ColorSpec, StandardStream, StandardStreamLock, WriteColor};
 
 use super::Process;
 #[cfg(feature = "test")]
@@ -56,6 +56,7 @@ pub struct ColorableTerminal {
     // would not be locked out.
     inner: Arc<Mutex<TerminalInner>>,
     is_a_tty: bool,
+    color_choice: ColorChoice,
 }
 
 /// Internal state for ColorableTerminal
@@ -109,6 +110,7 @@ impl ColorableTerminal {
         ColorableTerminal {
             inner: Arc::new(Mutex::new(inner)),
             is_a_tty,
+            color_choice: choice,
         }
     }
 
@@ -187,6 +189,10 @@ impl ColorableTerminal {
 
     pub fn is_a_tty(&self) -> bool {
         self.is_a_tty
+    }
+
+    pub fn color_choice(&self) -> ColorChoice {
+        self.color_choice
     }
 }
 
