@@ -795,6 +795,11 @@ async fn default_(
 async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode> {
     let t = cfg.process.stdout().terminal(cfg.process);
     let is_a_tty = t.is_a_tty();
+    let use_colors = match cfg.process.var("RUSTUP_TERM_COLOR").as_deref() {
+        Ok("always") => true,
+        Ok("never") => false,
+        _ => is_a_tty,
+    };
     let mut update_available = false;
     let channels = cfg.list_channels()?;
     let num_channels = channels.len();
@@ -825,25 +830,38 @@ async fn check_updates(cfg: &Cfg<'_>, opts: CheckOpts) -> Result<utils::ExitCode
                 let dist_version = distributable.show_dist_version().await?;
                 let mut update_a = false;
 
-                let styled_name = style(format!("{name} - ")).bold();
+                let mut styled_name = style(format!("{name} - "));
+                if use_colors {
+                    styled_name = styled_name.bold();
+                }
                 let message = match (current_version, dist_version) {
                     (None, None) => {
-                        let m = style("Cannot identify installed or update versions")
-                            .red()
-                            .bold();
+                        let mut m = style("Cannot identify installed or update versions");
+                        if use_colors {
+                            m = m.red().bold();
+                        }
                         format!("{styled_name}{m}")
                     }
                     (Some(cv), None) => {
-                        let m = style("Up to date").green().bold();
+                        let mut m = style("Up to date");
+                        if use_colors {
+                            m = m.green().bold();
+                        }
                         format!("{styled_name}{m} : {cv}")
                     }
                     (Some(cv), Some(dv)) => {
-                        let m = style("Update available").yellow().bold();
+                        let mut m = style("Update available");
+                        if use_colors {
+                            m = m.yellow().bold();
+                        }
                         update_a = true;
                         format!("{styled_name}{m} : {cv} -> {dv}")
                     }
                     (None, Some(dv)) => {
-                        let m = style("Update available").yellow().bold();
+                        let mut m = style("Update available");
+                        if use_colors {
+                            m = m.yellow().bold();
+                        }
                         update_a = true;
                         format!("{styled_name}{m} : (Unknown version) -> {dv}")
                     }
