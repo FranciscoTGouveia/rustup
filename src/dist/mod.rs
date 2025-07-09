@@ -1212,7 +1212,7 @@ async fn try_update_from_dist_(
             download.process,
         )
         .await;
-
+    
     // inspect, determine what context to add, then process afterwards.
     if let Err(e) = &result
         && let Some(RustupError::DownloadNotExists { .. }) = e.downcast_ref::<RustupError>()

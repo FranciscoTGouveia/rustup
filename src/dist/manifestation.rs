@@ -6,7 +6,9 @@ mod tests;
 
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, Error, anyhow, bail};
+use futures_util::stream::StreamExt;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tokio_retry::{RetryIf, strategy::FixedInterval};
 
 use crate::dist::component::{
@@ -162,6 +164,62 @@ impl Manifestation {
             .and_then(|s| s.parse().ok())
             .unwrap_or(DEFAULT_MAX_RETRIES);
 
+        let num_components= components.len();
+
+        let multi_progress_bars = MultiProgress::new();
+
+        let download_stream = tokio_stream::iter(components.into_iter().map(|(component, format, url, hash)| {
+            let pb = multi_progress_bars.add(ProgressBar::new(1));
+            pb.set_style(
+                ProgressStyle::with_template("{msg:.bold} - Installing... {spinner:.green}")
+                    .unwrap()
+                    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+            );
+            pb.set_message(format!("{}", component.short_name(new_manifest)));
+            pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+            let url = if altered {
+                url.replace(DEFAULT_DIST_SERVER, tmp_cx.dist_server.as_str())
+            } else {
+                url
+            };
+
+            async move {
+                let url_url = utils::parse_url(&url)?;
+                let downloaded_file = RetryIf::spawn(
+                    FixedInterval::from_millis(0).take(max_retries),
+                    || download_cfg.download(&url_url, &hash),
+                    |e: &anyhow::Error| {
+                        // retry only known retriable cases
+                        match e.downcast_ref::<RustupError>() {
+                            Some(RustupError::BrokenPartialFile)
+                            | Some(RustupError::DownloadingFile { .. }) => {
+                                (download_cfg.notify_handler)(Notification::RetryingDownload(&url));
+                                true
+                            }
+                            _ => false,
+                        }
+                    },
+                )
+                .await
+                .with_context(|| RustupError::ComponentDownloadFailed(component.name(new_manifest)))?;
+
+                pb.set_style(ProgressStyle::with_template("{msg:.green").unwrap());
+                pb.finish_with_message("Installed");
+                Ok::<(Component, CompressionKind, File, String), Error>((component, format, downloaded_file, hash))
+            }
+        }))
+        .buffered(num_components)
+        .collect::<Vec<_>>()
+        .await;
+
+        for result in download_stream {
+            let (c, f, d_f, h) = result?;
+            things_downloaded.push(h);
+            things_to_install.push((c, f, d_f));
+        }
+
+        /*
         for (component, format, url, hash) in components {
             (download_cfg.notify_handler)(Notification::DownloadingComponent(
                 &component.short_name(new_manifest),
@@ -198,6 +256,7 @@ impl Manifestation {
 
             things_to_install.push((component, format, downloaded_file));
         }
+        */
 
         // Begin transaction
         let mut tx = Transaction::new(

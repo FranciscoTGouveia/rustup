@@ -102,7 +102,6 @@ impl InstallMethod<'_> {
             InstallMethod::Dist(opts) => {
                 let prefix = &InstallPrefix::from(path.to_owned());
                 let maybe_new_hash = dist::update_from_dist(prefix, opts).await?;
-
                 if let Some(hash) = maybe_new_hash {
                     if let Some(hash_file) = opts.update_hash {
                         utils::write_file("update hash", hash_file, &hash)?;

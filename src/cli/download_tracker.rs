@@ -180,7 +180,7 @@ impl DownloadTracker {
                     Some(content_len) => {
                         let content_len_h = Size::new(content_len, unit, UnitMode::Norm);
                         let percent = (self.total_downloaded as f64 / content_len as f64) * 100.;
-                        let remaining = content_len - self.total_downloaded;
+                        let remaining = content_len - self.total_downloaded; //THERE MAY BE A DATA RACE THAT MAKES THIS PANIC.
                         let eta_h = Duration::from_secs(if speed == 0 {
                             u64::MAX
                         } else {
