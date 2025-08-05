@@ -152,7 +152,6 @@ impl Manifestation {
         let altered = tmp_cx.dist_server != DEFAULT_DIST_SERVER;
 
         // Download component packages and validate hashes
-        let mut things_to_install: Vec<(Component, CompressionKind, File)> = Vec::new();
         let mut things_downloaded: Vec<String> = Vec::new();
         let components = update.components_urls_and_hashes(new_manifest)?;
         let components_len = components.len();
@@ -174,6 +173,7 @@ impl Manifestation {
             ));
         }
 
+        // Download components with controlled concurrency, processing them as they complete
         let component_stream =
             tokio_stream::iter(components.into_iter()).map(|(component, format, url, hash)| {
                 async move {
@@ -214,142 +214,191 @@ impl Manifestation {
                     ))
                 }
             });
+            
         if components_len > 0 {
-            let results = component_stream
-                .buffered(components_len)
-                .collect::<Vec<_>>()
-                .await;
-            for result in results {
+            // Use buffered to allow concurrent downloads while processing them as they complete
+            let mut download_stream = component_stream.buffered(std::cmp::min(components_len, 4));
+            
+            // Begin transaction early so we can install components as they're downloaded
+            let mut tx = Transaction::new(
+                prefix.clone(),
+                tmp_cx,
+                download_cfg.notify_handler,
+                download_cfg.process,
+            );
+
+            // If the previous installation was from a v1 manifest we need
+            // to uninstall it first.
+            tx = self.maybe_handle_v2_upgrade(&config, tx, download_cfg.process)?;
+
+            // Uninstall components before starting downloads/installations
+            for component in &update.components_to_uninstall {
+                let notification = if implicit_modify {
+                    Notification::RemovingOldComponent
+                } else {
+                    Notification::RemovingComponent
+                };
+                (download_cfg.notify_handler)(notification(
+                    &component.short_name(new_manifest),
+                    &self.target_triple,
+                    component.target.as_ref(),
+                ));
+
+                tx = self.uninstall_component(
+                    component,
+                    new_manifest,
+                    tx,
+                    &download_cfg.notify_handler,
+                    download_cfg.process,
+                )?;
+            }
+            
+            // Process downloads and install components as they become available
+            while let Some(result) = download_stream.next().await {
                 match result {
                     Ok((component, format, downloaded_file, hash)) => {
-                        things_downloaded.push(hash);
-                        things_to_install.push((component, format, downloaded_file));
+                        things_downloaded.push(hash.clone());
+                        
+                        // Install component immediately after download
+                        let pkg_name = component.name_in_manifest();
+                        let short_pkg_name = component.short_name_in_manifest();
+                        let short_name = component.short_name(new_manifest);
+
+                        (download_cfg.notify_handler)(Notification::InstallingComponent(
+                            &short_name,
+                            &self.target_triple,
+                            component.target.as_ref(),
+                        ));
+
+                        let notification_converter = |notification: crate::utils::Notification<'_>| {
+                            (download_cfg.notify_handler)(notification.into());
+                        };
+                        let gz;
+                        let xz;
+                        let zst;
+                        let reader =
+                            utils::FileReaderWithProgress::new_file(&downloaded_file, &notification_converter)?;
+                        let package: &dyn Package = match format {
+                            CompressionKind::GZip => {
+                                gz = TarGzPackage::new(
+                                    reader,
+                                    tmp_cx,
+                                    Some(&notification_converter),
+                                    download_cfg.process,
+                                )?;
+                                &gz
+                            }
+                            CompressionKind::XZ => {
+                                xz = TarXzPackage::new(
+                                    reader,
+                                    tmp_cx,
+                                    Some(&notification_converter),
+                                    download_cfg.process,
+                                )?;
+                                &xz
+                            }
+                            CompressionKind::ZStd => {
+                                zst = TarZStdPackage::new(
+                                    reader,
+                                    tmp_cx,
+                                    Some(&notification_converter),
+                                    download_cfg.process,
+                                )?;
+                                &zst
+                            }
+                        };
+
+                        // If the package doesn't contain the component that the
+                        // manifest says it does then somebody must be playing a joke on us.
+                        if !package.contains(&pkg_name, Some(short_pkg_name)) {
+                            return Err(RustupError::CorruptComponent(short_name).into());
+                        }
+
+                        tx = package.install(&self.installation, &pkg_name, Some(short_pkg_name), tx)?;
                     }
                     Err(e) => return Err(e),
                 }
             }
-        }
+            
+            // Install new distribution manifest
+            let new_manifest_str = new_manifest.clone().stringify()?;
+            tx.modify_file(rel_installed_manifest_path)?;
+            utils::write_file("manifest", &installed_manifest_path, &new_manifest_str)?;
 
-        // Begin transaction
-        let mut tx = Transaction::new(
-            prefix.clone(),
-            tmp_cx,
-            download_cfg.notify_handler,
-            download_cfg.process,
-        );
-
-        // If the previous installation was from a v1 manifest we need
-        // to uninstall it first.
-        tx = self.maybe_handle_v2_upgrade(&config, tx, download_cfg.process)?;
-
-        // Uninstall components
-        for component in &update.components_to_uninstall {
-            let notification = if implicit_modify {
-                Notification::RemovingOldComponent
-            } else {
-                Notification::RemovingComponent
+            // Write configuration.
+            //
+            // NB: This configuration is mostly for keeping track of the name/target pairs
+            // that identify installed components. The rust-installer metadata maintained by
+            // `Components` *also* tracks what is installed, but it only tracks names, not
+            // name/target. Needs to be fixed in rust-installer.
+            let new_config = Config {
+                components: update.final_component_list,
+                ..Config::default()
             };
-            (download_cfg.notify_handler)(notification(
-                &component.short_name(new_manifest),
-                &self.target_triple,
-                component.target.as_ref(),
-            ));
+            let config_str = new_config.stringify()?;
+            let rel_config_path = prefix.rel_manifest_file(CONFIG_FILE);
+            let config_path = prefix.path().join(&rel_config_path);
+            tx.modify_file(rel_config_path)?;
+            utils::write_file("dist config", &config_path, &config_str)?;
 
-            tx = self.uninstall_component(
-                component,
-                new_manifest,
-                tx,
-                &download_cfg.notify_handler,
+            // End transaction
+            tx.commit();
+            
+        } else {
+            // No components to download/install, but we still need to handle the transaction
+            // Begin transaction
+            let mut tx = Transaction::new(
+                prefix.clone(),
+                tmp_cx,
+                download_cfg.notify_handler,
                 download_cfg.process,
-            )?;
-        }
+            );
 
-        // Install components
-        for (component, format, installer_file) in things_to_install {
-            // For historical reasons, the rust-installer component
-            // names are not the same as the dist manifest component
-            // names. Some are just the component name some are the
-            // component name plus the target triple.
-            let pkg_name = component.name_in_manifest();
-            let short_pkg_name = component.short_name_in_manifest();
-            let short_name = component.short_name(new_manifest);
+            // If the previous installation was from a v1 manifest we need
+            // to uninstall it first.
+            tx = self.maybe_handle_v2_upgrade(&config, tx, download_cfg.process)?;
 
-            (download_cfg.notify_handler)(Notification::InstallingComponent(
-                &short_name,
-                &self.target_triple,
-                component.target.as_ref(),
-            ));
+            // Uninstall components
+            for component in &update.components_to_uninstall {
+                let notification = if implicit_modify {
+                    Notification::RemovingOldComponent
+                } else {
+                    Notification::RemovingComponent
+                };
+                (download_cfg.notify_handler)(notification(
+                    &component.short_name(new_manifest),
+                    &self.target_triple,
+                    component.target.as_ref(),
+                ));
 
-            let notification_converter = |notification: crate::utils::Notification<'_>| {
-                (download_cfg.notify_handler)(notification.into());
-            };
-            let gz;
-            let xz;
-            let zst;
-            let reader =
-                utils::FileReaderWithProgress::new_file(&installer_file, &notification_converter)?;
-            let package: &dyn Package = match format {
-                CompressionKind::GZip => {
-                    gz = TarGzPackage::new(
-                        reader,
-                        tmp_cx,
-                        Some(&notification_converter),
-                        download_cfg.process,
-                    )?;
-                    &gz
-                }
-                CompressionKind::XZ => {
-                    xz = TarXzPackage::new(
-                        reader,
-                        tmp_cx,
-                        Some(&notification_converter),
-                        download_cfg.process,
-                    )?;
-                    &xz
-                }
-                CompressionKind::ZStd => {
-                    zst = TarZStdPackage::new(
-                        reader,
-                        tmp_cx,
-                        Some(&notification_converter),
-                        download_cfg.process,
-                    )?;
-                    &zst
-                }
-            };
-
-            // If the package doesn't contain the component that the
-            // manifest says it does then somebody must be playing a joke on us.
-            if !package.contains(&pkg_name, Some(short_pkg_name)) {
-                return Err(RustupError::CorruptComponent(short_name).into());
+                tx = self.uninstall_component(
+                    component,
+                    new_manifest,
+                    tx,
+                    &download_cfg.notify_handler,
+                    download_cfg.process,
+                )?;
             }
+            
+            // Install new distribution manifest
+            let new_manifest_str = new_manifest.clone().stringify()?;
+            tx.modify_file(rel_installed_manifest_path)?;
+            utils::write_file("manifest", &installed_manifest_path, &new_manifest_str)?;
 
-            tx = package.install(&self.installation, &pkg_name, Some(short_pkg_name), tx)?;
+            // Write configuration.
+            let new_config = Config {
+                components: update.final_component_list,
+                ..Config::default()
+            };
+            let config_str = new_config.stringify()?;
+            let rel_config_path = prefix.rel_manifest_file(CONFIG_FILE);
+            let config_path = prefix.path().join(&rel_config_path);
+            tx.modify_file(rel_config_path)?;
+            utils::write_file("dist config", &config_path, &config_str)?;
+
+            // End transaction
+            tx.commit();
         }
-
-        // Install new distribution manifest
-        let new_manifest_str = new_manifest.clone().stringify()?;
-        tx.modify_file(rel_installed_manifest_path)?;
-        utils::write_file("manifest", &installed_manifest_path, &new_manifest_str)?;
-
-        // Write configuration.
-        //
-        // NB: This configuration is mostly for keeping track of the name/target pairs
-        // that identify installed components. The rust-installer metadata maintained by
-        // `Components` *also* tracks what is installed, but it only tracks names, not
-        // name/target. Needs to be fixed in rust-installer.
-        let new_config = Config {
-            components: update.final_component_list,
-            ..Config::default()
-        };
-        let config_str = new_config.stringify()?;
-        let rel_config_path = prefix.rel_manifest_file(CONFIG_FILE);
-        let config_path = prefix.path().join(&rel_config_path);
-        tx.modify_file(rel_config_path)?;
-        utils::write_file("dist config", &config_path, &config_str)?;
-
-        // End transaction
-        tx.commit();
 
         download_cfg.clean(&things_downloaded)?;
 
