@@ -213,7 +213,7 @@ impl Manifestation {
             for result in results {
                 let (bin, downloaded_file) = result?;
                 things_downloaded.push(bin.binary.hash.clone());
-                things_to_install.push((bin.component, bin.binary.compression, downloaded_file));
+                things_to_install.push((bin, downloaded_file));
             }
         }
 
@@ -256,41 +256,14 @@ impl Manifestation {
         }
 
         // Install components
-        for (component, format, installer_file) in things_to_install {
-            // For historical reasons, the rust-installer component
-            // names are not the same as the dist manifest component
-            // names. Some are just the component name some are the
-            // component name plus the target triple.
-            let pkg_name = component.name_in_manifest();
-            let short_pkg_name = component.short_name_in_manifest();
-            let short_name = component.short_name(new_manifest);
-
-            match &component.target {
-                Some(t) if t != &self.target_triple => {
-                    info!("installing component {short_name}");
-                }
-                _ => {
-                    info!(
-                        "installing component {short_name} for target {}",
-                        self.target_triple
-                    )
-                }
-            }
-
-            let reader = utils::FileReaderWithProgress::new_file(&installer_file)?;
-            let package = match format {
-                CompressionKind::GZip => &TarGzPackage::new(reader, download_cfg)? as &dyn Package,
-                CompressionKind::XZ => &TarXzPackage::new(reader, download_cfg)?,
-                CompressionKind::ZStd => &TarZStdPackage::new(reader, download_cfg)?,
-            };
-
-            // If the package doesn't contain the component that the
-            // manifest says it does then somebody must be playing a joke on us.
-            if !package.contains(&pkg_name, Some(short_pkg_name)) {
-                return Err(RustupError::CorruptComponent(short_name).into());
-            }
-
-            tx = package.install(&self.installation, &pkg_name, Some(short_pkg_name), tx)?;
+        for (component_bin, installer_file) in things_to_install {
+            tx = self.install_component(
+                component_bin,
+                installer_file,
+                download_cfg,
+                new_manifest,
+                tx,
+            )?;
         }
 
         // Install new distribution manifest
@@ -305,7 +278,7 @@ impl Manifestation {
         // `Components` *also* tracks what is installed, but it only tracks names, not
         // name/target. Needs to be fixed in rust-installer.
         let new_config = Config {
-            components: update.final_component_list,
+            components: update.final_component_list.clone(),
             ..Config::default()
         };
         let config_str = new_config.stringify()?;
@@ -498,6 +471,50 @@ impl Manifestation {
         }
 
         Ok(tx)
+    }
+
+    fn install_component<'a>(
+        &self,
+        component_bin: ComponentBinary<'a>,
+        installer_file: File,
+        download_cfg: &DownloadCfg<'_>,
+        new_manifest: &Manifest,
+        tx: Transaction<'a>,
+    ) -> Result<Transaction<'a>> {
+        // For historical reasons, the rust-installer component
+        // names are not the same as the dist manifest component
+        // names. Some are just the component name some are the
+        // component name plus the target triple.
+        let pkg_name = component_bin.component.name_in_manifest();
+        let short_pkg_name = component_bin.component.short_name_in_manifest();
+        let short_name = component_bin.component.short_name(new_manifest);
+
+        match &component_bin.component.target {
+            Some(t) if t != &self.target_triple => {
+                info!("installing component {short_name}");
+            }
+            _ => {
+                info!(
+                    "installing component {short_name} for target {}",
+                    self.target_triple
+                )
+            }
+        }
+
+        let reader = utils::FileReaderWithProgress::new_file(&installer_file)?;
+        let package = match component_bin.binary.compression {
+            CompressionKind::GZip => &TarGzPackage::new(reader, download_cfg)? as &dyn Package,
+            CompressionKind::XZ => &TarXzPackage::new(reader, download_cfg)?,
+            CompressionKind::ZStd => &TarZStdPackage::new(reader, download_cfg)?,
+        };
+
+        // If the package doesn't contain the component that the
+        // manifest says it does then somebody must be playing a joke on us.
+        if !package.contains(&pkg_name, Some(short_pkg_name)) {
+            return Err(RustupError::CorruptComponent(short_name).into());
+        }
+
+        package.install(&self.installation, &pkg_name, Some(short_pkg_name), tx)
     }
 }
 
