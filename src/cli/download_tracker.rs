@@ -59,6 +59,10 @@ impl DownloadTracker {
                 self.create_progress_bar(component.to_owned(), url.to_owned());
                 true
             }
+            Notification::Install(In::InstallingComponent(component, _, _)) => {
+                self.installing_component(component);
+                true
+            }
             _ => false,
         }
     }
@@ -103,5 +107,25 @@ impl DownloadTracker {
                 .unwrap(),
         );
         pb.finish();
+    }
+
+    /// Notifies that the downloaded component is being installed.
+    pub(crate) fn installing_component(&mut self, component: &str) {
+        let key = self
+            .file_progress_bars
+            .keys()
+            .find(|comp| comp.contains(component))
+            .cloned();
+        if let Some(key) = key
+            && let Some(pb) = self.file_progress_bars.get(&key)
+        {
+            pb.set_style(
+                ProgressStyle::with_template(
+                    "{msg:>12.bold}  downloaded {total_bytes} in {elapsed} installing now...",
+                )
+                .unwrap(),
+            );
+            pb.finish();
+        }
     }
 }
