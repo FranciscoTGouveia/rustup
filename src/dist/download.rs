@@ -272,7 +272,6 @@ impl DownloadStatus {
             ProgressStyle::with_template("{msg:>12.bold}  downloaded {total_bytes} in {elapsed}")
                 .unwrap(),
         );
-        self.progress.finish();
     }
 
     pub(crate) fn failed(&self) {
@@ -287,6 +286,16 @@ impl DownloadStatus {
         *self.retry_time.lock().unwrap() = Some(Instant::now());
         self.progress
             .set_style(ProgressStyle::with_template("{msg:>12.bold}  retrying download").unwrap());
+    }
+
+    pub(crate) fn installing(&self) {
+        self.progress.set_style(
+            ProgressStyle::with_template(
+                "{msg:>12.bold}  downloaded {total_bytes} in {elapsed} installing now...",
+            )
+            .unwrap(),
+        );
+        self.progress.finish();
     }
 }
 

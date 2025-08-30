@@ -517,17 +517,7 @@ impl Manifestation {
         let short_pkg_name = component_bin.component.short_name_in_manifest();
         let short_name = component_bin.component.short_name(new_manifest);
 
-        match &component_bin.component.target {
-            Some(t) if t != &self.target_triple => {
-                info!("installing component {short_name}");
-            }
-            _ => {
-                info!(
-                    "installing component {short_name} for target {}",
-                    self.target_triple
-                )
-            }
-        }
+        download_cfg.status_for(short_name.clone()).installing();
 
         let reader = utils::FileReaderWithProgress::new_file(&installer_file)?;
         let package = match component_bin.binary.compression {
