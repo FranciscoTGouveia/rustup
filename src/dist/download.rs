@@ -291,9 +291,18 @@ impl DownloadStatus {
     pub(crate) fn installing(&self) {
         self.progress.set_style(
             ProgressStyle::with_template(
-                "{msg:>12.bold}  downloaded {total_bytes} in {elapsed} installing now...",
+                "{msg:>12.bold}  downloaded {total_bytes} in {elapsed} installing now {spinner:.green}",
             )
-            .unwrap(),
+            .unwrap()
+            .tick_chars(r"|/-\ "),
+        );
+        self.progress.enable_steady_tick(Duration::from_millis(100));
+    }
+
+    pub(crate) fn installed(&self) {
+        self.progress.set_style(
+            ProgressStyle::with_template("{msg:>12.bold} downloaded {total_bytes} and installed")
+                .unwrap(),
         );
         self.progress.finish();
     }
