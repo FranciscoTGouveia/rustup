@@ -271,6 +271,7 @@ impl Manifestation {
                     && let Some(message) = download_rx.recv().await
                 {
                     let (component_bin, installer_file) = message?;
+                    let short_name = component_bin.component.short_name(new_manifest);
                     current_tx = self.install_component(
                         component_bin,
                         installer_file,
@@ -279,6 +280,11 @@ impl Manifestation {
                         new_manifest,
                         current_tx,
                     )?;
+                    (download_cfg.notify_handler)(Notification::ComponentInstalled(
+                        &short_name,
+                        &self.target_triple,
+                        Some(&self.target_triple),
+                    ));
                     counter += 1;
                 }
                 Ok::<_, Error>(current_tx)
