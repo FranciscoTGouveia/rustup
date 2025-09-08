@@ -269,8 +269,12 @@ impl DownloadStatus {
 
     pub(crate) fn finished(&self) {
         self.progress.set_style(
-            ProgressStyle::with_template("{msg:>12.bold}  downloaded {total_bytes} in {elapsed}")
-                .unwrap(),
+            ProgressStyle::with_template(if self.progress.position() != 0 {
+                "{msg:>12.bold}  downloaded {total_bytes} in {elapsed}"
+            } else {
+                "{msg:>12.bold}  component already downloaded"
+            })
+            .unwrap(),
         );
     }
 
@@ -290,9 +294,11 @@ impl DownloadStatus {
 
     pub(crate) fn installing(&self) {
         self.progress.set_style(
-            ProgressStyle::with_template(
-                "{msg:>12.bold}  downloaded {total_bytes} in {elapsed} installing now {spinner:.green}",
-            )
+            ProgressStyle::with_template( if self.progress.position() != 0 {
+                "{msg:>12.bold}  downloaded {total_bytes} in {elapsed} and installing {spinner:.green}"
+            } else {
+                "{msg:>12.bold}  component already downloaded and installing {spinner:.green}"
+            })
             .unwrap()
             .tick_chars(r"|/-\ "),
         );
@@ -301,8 +307,12 @@ impl DownloadStatus {
 
     pub(crate) fn installed(&self) {
         self.progress.set_style(
-            ProgressStyle::with_template("{msg:>12.bold} downloaded {total_bytes} and installed")
-                .unwrap(),
+            ProgressStyle::with_template(if self.progress.position() != 0 {
+                "{msg:>12.bold}  downloaded {total_bytes} and installed"
+            } else {
+                "{msg:>12.bold}  component already downloaded and installed"
+            })
+            .unwrap(),
         );
         self.progress.finish();
     }
