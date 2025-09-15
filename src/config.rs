@@ -334,7 +334,7 @@ impl<'a> Cfg<'a> {
     ) -> DownloadCfg<'a> {
         DownloadCfg {
             dist_root: &self.dist_root_url,
-            tmp_cx: &self.tmp_cx,
+            tmp_cx: Arc::new(self.tmp_cx.clone()),
             download_dir: &self.download_dir,
             notify_handler: notify_handler.into(),
             process: self.process,

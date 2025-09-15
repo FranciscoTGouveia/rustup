@@ -114,7 +114,7 @@ impl Manifestation {
         implicit_modify: bool,
     ) -> Result<UpdateStatus> {
         // Some vars we're going to need a few times
-        let tmp_cx = download_cfg.tmp_cx;
+        let tmp_cx = Arc::clone(&download_cfg.tmp_cx);
         let prefix = self.installation.prefix();
         let rel_installed_manifest_path = prefix.rel_manifest_file(DIST_MANIFEST);
         let installed_manifest_path = prefix.path().join(&rel_installed_manifest_path);
@@ -174,7 +174,7 @@ impl Manifestation {
         // Begin transaction before the downloads, as installations are interleaved with those
         let mut tx = Transaction::new(
             prefix.clone(),
-            Arc::new(download_cfg.tmp_cx.clone()),
+            Arc::clone(&download_cfg.tmp_cx),
             Arc::clone(&download_cfg.notify_handler),
             Arc::new(download_cfg.process.clone()),
         );
@@ -228,12 +228,14 @@ impl Manifestation {
                 let download_tx = download_tx.clone();
                 {
                     let this = Arc::clone(&self);
+                    let tmp_cx = Arc::clone(&tmp_cx);
                     let new_manifest = Arc::clone(&new_manifest);
                     let download_cfg = download_cfg.clone();
                     move |(component, format, url, hash)| {
                         let sem = semaphore.clone();
                         let download_tx = download_tx.clone();
                         let this = Arc::clone(&this);
+                        let tmp_cx = Arc::clone(&tmp_cx);
                         let new_manifest = Arc::clone(&new_manifest);
                         let download_cfg = download_cfg.clone();
                         async move {
@@ -244,7 +246,7 @@ impl Manifestation {
                                 url,
                                 hash,
                                 altered,
-                                tmp_cx,
+                                &*tmp_cx,
                                 &download_cfg,
                                 max_retries,
                                 &*new_manifest,
@@ -294,7 +296,7 @@ impl Manifestation {
                                     component,
                                     format,
                                     installer_file,
-                                    Arc::new(tmp_cx),
+                                    Arc::clone(&tmp_cx),
                                     download_cfg,
                                     Arc::clone(&new_manifest),
                                     current_tx,
@@ -487,7 +489,7 @@ impl Manifestation {
         let dlcfg = DownloadCfg {
             dist_root: "bogus",
             download_dir: &dld_dir,
-            tmp_cx: &*tmp_cx,
+            tmp_cx: Arc::clone(&tmp_cx),
             notify_handler: Arc::clone(&notify_handler),
             process: &process,
         };

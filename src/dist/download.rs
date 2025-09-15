@@ -20,7 +20,7 @@ const UPDATE_HASH_LEN: usize = 20;
 #[derive(Clone)]
 pub struct DownloadCfg<'a> {
     pub dist_root: &'a str,
-    pub tmp_cx: &'a temp::Context,
+    pub tmp_cx: Arc<temp::Context>,
     pub download_dir: &'a PathBuf,
     pub notify_handler: Arc<NotifyHandler>,
     pub process: &'a Process,
@@ -29,7 +29,7 @@ pub struct DownloadCfg<'a> {
 #[derive(Clone)]
 pub struct OwnedDownloadCfg {
     pub dist_root: String,
-    pub tmp_cx: temp::Context,
+    pub tmp_cx: Arc<temp::Context>,
     pub download_dir: PathBuf,
     pub notify_handler: Arc<NotifyHandler>,
     pub process: Process,
@@ -39,7 +39,7 @@ impl<'a> From<&'a OwnedDownloadCfg> for DownloadCfg<'a> {
     fn from(odc: &'a OwnedDownloadCfg) -> Self {
         Self {
             dist_root: &odc.dist_root,
-            tmp_cx: &odc.tmp_cx,
+            tmp_cx: Arc::clone(&odc.tmp_cx),
             download_dir: &odc.download_dir,
             notify_handler: Arc::clone(&odc.notify_handler),
             process: &odc.process,
@@ -51,7 +51,7 @@ impl DownloadCfg<'_> {
     pub fn to_owned(&self) -> OwnedDownloadCfg {
         OwnedDownloadCfg {
             dist_root: self.dist_root.to_owned(),
-            tmp_cx: self.tmp_cx.clone(),
+            tmp_cx: Arc::clone(&self.tmp_cx),
             download_dir: self.download_dir.clone(),
             notify_handler: Arc::clone(&self.notify_handler),
             process: self.process.clone(),
@@ -168,7 +168,7 @@ impl<'a> DownloadCfg<'a> {
 
     async fn download_hash(&self, url: &str) -> Result<String> {
         let hash_url = utils::parse_url(&(url.to_owned() + ".sha256"))?;
-        let hash_file = self.tmp_cx.new_file()?;
+        let hash_file = Arc::clone(&self.tmp_cx).new_file()?;
 
         download_file(
             &hash_url,
@@ -212,7 +212,7 @@ impl<'a> DownloadCfg<'a> {
         }
 
         let url = utils::parse_url(url_str)?;
-        let file = self.tmp_cx.new_file_with_ext("", ext)?;
+        let file = Arc::clone(&self.tmp_cx).new_file_with_ext("", ext)?;
 
         let mut hasher = Sha256::new();
         download_file(

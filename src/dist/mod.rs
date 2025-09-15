@@ -1215,7 +1215,7 @@ async fn try_update_from_dist_(
         .update_v1(
             &manifest,
             update_hash,
-            Arc::new(download.tmp_cx),
+            Arc::clone(&download.tmp_cx),
             download.notify_handler,
             Arc::new(download.process),
         )
