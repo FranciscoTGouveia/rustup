@@ -223,7 +223,7 @@ impl Manifestation {
             // This is recommended in the official docs: https://docs.rs/tokio/latest/tokio/sync/index.html#mpsc-channel
             let total_components = components.len();
             let (download_tx, mut download_rx) =
-                mpsc::channel::<Result<(ComponentBinary<'_>, File)>>(total_components);
+                mpsc::channel::<Result<(ComponentBinary, File)>>(total_components);
 
             let semaphore = Arc::new(Semaphore::new(concurrent_downloads));
             let component_stream = tokio_stream::iter(components.into_iter()).map({
@@ -287,20 +287,23 @@ impl Manifestation {
                         let (component_bin, installer_file) = message?;
                         let component_name = component_bin.component.short_name(&new_manifest);
                         let notify_handler = Arc::clone(&download_cfg.notify_handler);
-                        current_tx = {
+                        current_tx = tokio::task::spawn_blocking({
                             let this = Arc::clone(&self);
                             let new_manifest = Arc::clone(&new_manifest);
                             let tmp_cx = Arc::clone(&download_cfg.tmp_cx);
                             let download_cfg = Arc::clone(&download_cfg);
-                            this.install_component(
-                                component_bin,
-                                installer_file,
-                                tmp_cx,
-                                download_cfg,
-                                new_manifest,
-                                current_tx,
-                            )
-                        }?;
+                            move || {
+                                this.install_component(
+                                    component_bin,
+                                    installer_file,
+                                    tmp_cx,
+                                    download_cfg,
+                                    new_manifest,
+                                    current_tx,
+                                )
+                            }
+                        })
+                        .await??;
                         (notify_handler)(Notification::ComponentInstalled(
                             &component_name,
                             &self.target_triple,
@@ -566,7 +569,7 @@ impl Manifestation {
 
     fn install_component(
         &self,
-        component_bin: ComponentBinary<'a>,
+        component_bin: ComponentBinary,
         installer_file: File,
         tmp_cx: Arc<temp::Context>,
         download_cfg: Arc<DownloadCfg>,
@@ -805,7 +808,7 @@ impl Update {
     fn components_urls_and_hashes<'a>(
         &'a self,
         new_manifest: &'a Manifest,
-    ) -> Result<Vec<ComponentBinary<'a>>> {
+    ) -> Result<Vec<ComponentBinary>> {
         let mut components_urls_and_hashes = Vec::new();
         for component in &self.components_to_install {
             let package = new_manifest.get_package(component.short_name_in_manifest())?;
@@ -818,8 +821,8 @@ impl Update {
             // We prefer the first format in the list, since the parsing of the
             // manifest leaves us with the files/hash pairs in preference order.
             components_urls_and_hashes.push(ComponentBinary {
-                component,
-                binary: &target_package.bins[0],
+                component: Arc::new(component.clone()),
+                binary: Arc::new(target_package.bins[0].clone()),
             });
         }
 
@@ -827,12 +830,12 @@ impl Update {
     }
 }
 
-struct ComponentBinary<'a> {
-    component: &'a Component,
-    binary: &'a HashedBinary,
+struct ComponentBinary {
+    component: Arc<Component>,
+    binary: Arc<HashedBinary>,
 }
 
-impl<'a> ComponentBinary<'a> {
+impl ComponentBinary {
     async fn download(
         &self,
         url: &Url,
