@@ -296,18 +296,21 @@ impl Manifestation {
                     {
                         let (component_bin, installer_file) = message?;
                         let component_name = component_bin.component.short_name(&new_manifest);
-                        current_tx = {
+                        current_tx = tokio::task::spawn_blocking({
                             let this = Arc::clone(&self);
                             let new_manifest = Arc::clone(&new_manifest);
                             let download_cfg = Arc::clone(&download_cfg);
-                            this.install_component(
-                                component_bin,
-                                installer_file,
-                                download_cfg,
-                                new_manifest,
-                                current_tx,
-                            )
-                        }?;
+                            move || {
+                                this.install_component(
+                                    component_bin,
+                                    installer_file,
+                                    download_cfg,
+                                    new_manifest,
+                                    current_tx,
+                                )
+                            }
+                        })
+                        .await??;
                         download_cfg.status_for(component_name).installed();
                         counter += 1;
                     }
