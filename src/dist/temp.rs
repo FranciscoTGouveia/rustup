@@ -72,6 +72,7 @@ impl Drop for File {
     }
 }
 
+#[derive(Clone)]
 pub struct Context {
     root_directory: PathBuf,
     pub dist_server: String,
@@ -93,6 +94,8 @@ impl Context {
     }
 
     pub(crate) fn new_directory(&self) -> Result<Dir> {
+        // TODO: subsistute for this if needed: pub(crate) fn new_directory(self: Arc<Self>) -> Result<Dir> {
+        // If that happens the below methods will also need that change.
         self.create_root()?;
 
         loop {
