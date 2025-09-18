@@ -10,6 +10,8 @@ use crate::settings::MetadataVersion;
 use crate::utils::units;
 use crate::{dist::ToolchainDesc, toolchain::ToolchainName, utils::notify::NotificationLevel};
 
+pub(crate) type NotifyHandler = dyn for<'a> Fn(Notification<'a>) + Sync + Send;
+
 #[derive(Debug)]
 pub enum Notification<'a> {
     Extracting(&'a Path, &'a Path),
